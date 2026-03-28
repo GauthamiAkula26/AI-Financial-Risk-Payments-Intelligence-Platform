@@ -1,16 +1,11 @@
-transaction_id,amount,payment_type,risk_score,status,fraud_flag,device,geo,failed_attempts
-TXN-20001,850,ACH,45,Completed,0,Known Device,Normal,0
-TXN-20002,14500,Wire,91,Flagged,1,New Device,Geo Mismatch,3
-TXN-20003,320,Card,20,Completed,0,Known Device,Normal,0
-TXN-20004,17800,Wire,94,Flagged,1,New Device,Geo Mismatch,4
-TXN-20005,2600,RTP,62,Pending,0,Known Device,Normal,1
-TXN-20006,9200,ACH,78,Flagged,1,New Device,Normal,2
-TXN-20007,540,Card,30,Completed,0,Known Device,Normal,0
-TXN-20008,11200,Wire,85,Flagged,1,Known Device,Geo Mismatch,2
-TXN-20009,1800,ACH,58,Completed,0,Known Device,Normal,0
-TXN-20010,22000,Wire,97,Flagged,1,New Device,Geo Mismatch,5
-TXN-20011,700,Card,35,Completed,0,Known Device,Normal,0
-TXN-20012,15800,Wire,92,Flagged,1,New Device,Geo Mismatch,3
-TXN-20013,3400,RTP,66,Pending,0,Known Device,Normal,1
-TXN-20014,6100,ACH,74,Completed,0,Known Device,Normal,0
-TXN-20015,9800,Wire,83,Flagged,1,New Device,Geo Mismatch,2
+transaction_id,customer_id,amount,currency,payment_rail,channel,risk_score,status,is_fraud_label,device_id,ip_address,geo_mismatch_flag,origin_country,destination_country,merchant_category,timestamp,velocity_flag,beneficiary_change_flag,customer_txn_count_24h,historical_customer_avg_amount,failure_code,direction
+TXN-30001,CUST-101,850,USD,ACH,Online,45,Completed,0,DEV-1,192.168.1.1,0,US,US,Groceries,2025-03-20 10:15:00,0,0,2,500,NA,Debit
+TXN-30002,CUST-102,14500,USD,Wire,Online,91,Flagged,1,DEV-9,10.1.1.1,1,US,GB,Transfer,2025-03-20 11:10:00,1,1,6,1200,NA,Debit
+TXN-30003,CUST-103,320,USD,Card,POS,20,Completed,0,DEV-3,172.1.1.1,0,US,US,Retail,2025-03-20 12:00:00,0,0,1,400,NA,Debit
+TXN-30004,CUST-104,17800,USD,Wire,Online,94,Flagged,1,DEV-10,10.1.1.2,1,US,IN,Transfer,2025-03-20 13:30:00,1,1,7,1500,NA,Debit
+TXN-30005,CUST-105,2600,USD,RTP,Mobile,62,Pending,0,DEV-5,192.168.2.2,0,US,US,Bills,2025-03-20 14:10:00,0,0,3,700,NA,Debit
+TXN-30006,CUST-106,9200,USD,ACH,Online,78,Flagged,1,DEV-7,10.1.1.3,0,US,US,Transfer,2025-03-20 15:20:00,1,0,5,900,NA,Debit
+TXN-30007,CUST-107,540,USD,Card,POS,30,Completed,0,DEV-2,172.1.1.2,0,US,US,Retail,2025-03-20 16:05:00,0,0,1,300,NA,Debit
+TXN-30008,CUST-108,11200,USD,Wire,Online,85,Flagged,1,DEV-8,10.1.1.4,1,US,CN,Transfer,2025-03-20 17:00:00,1,1,6,1100,NA,Debit
+TXN-30009,CUST-109,1800,USD,ACH,Mobile,58,Completed,0,DEV-4,192.168.3.3,0,US,US,Bills,2025-03-20 18:10:00,0,0,2,600,NA,Debit
+TXN-30010,CUST-110,22000,USD,Wire,Online,97,Flagged,1,DEV-11,10.1.1.5,1,US,RU,Transfer,2025-03-20 19:20:00,1,1,8,2000,NA,Debit
