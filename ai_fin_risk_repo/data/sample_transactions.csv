@@ -1,16 +1,16 @@
 transaction_id,amount,payment_type,risk_score,status,fraud_flag,device,geo,failed_attempts
-TXN-10001,500,ACH,42,Completed,0,Known Device,Normal,0
-TXN-10002,12000,Wire,88,Flagged,1,New Device,Geo Mismatch,2
-TXN-10003,300,Card,25,Completed,0,Known Device,Normal,0
-TXN-10004,15000,Wire,92,Flagged,1,New Device,Geo Mismatch,3
-TXN-10005,2200,RTP,61,Pending,0,Known Device,Normal,1
-TXN-10006,7800,ACH,76,Flagged,1,New Device,Normal,2
-TXN-10007,450,Card,18,Completed,0,Known Device,Normal,0
-TXN-10008,9800,Wire,81,Flagged,1,Known Device,Geo Mismatch,1
-TXN-10009,1250,ACH,55,Completed,0,Known Device,Normal,0
-TXN-10010,20000,Wire,95,Flagged,1,New Device,Geo Mismatch,4
-TXN-10011,670,Card,29,Completed,0,Known Device,Normal,0
-TXN-10012,13250,Wire,90,Flagged,1,New Device,Geo Mismatch,2
-TXN-10013,3100,RTP,68,Pending,0,Known Device,Normal,1
-TXN-10014,5400,ACH,73,Completed,0,Known Device,Normal,0
-TXN-10015,8600,Wire,84,Flagged,1,New Device,Geo Mismatch,2
+TXN-20001,850,ACH,45,Completed,0,Known Device,Normal,0
+TXN-20002,14500,Wire,91,Flagged,1,New Device,Geo Mismatch,3
+TXN-20003,320,Card,20,Completed,0,Known Device,Normal,0
+TXN-20004,17800,Wire,94,Flagged,1,New Device,Geo Mismatch,4
+TXN-20005,2600,RTP,62,Pending,0,Known Device,Normal,1
+TXN-20006,9200,ACH,78,Flagged,1,New Device,Normal,2
+TXN-20007,540,Card,30,Completed,0,Known Device,Normal,0
+TXN-20008,11200,Wire,85,Flagged,1,Known Device,Geo Mismatch,2
+TXN-20009,1800,ACH,58,Completed,0,Known Device,Normal,0
+TXN-20010,22000,Wire,97,Flagged,1,New Device,Geo Mismatch,5
+TXN-20011,700,Card,35,Completed,0,Known Device,Normal,0
+TXN-20012,15800,Wire,92,Flagged,1,New Device,Geo Mismatch,3
+TXN-20013,3400,RTP,66,Pending,0,Known Device,Normal,1
+TXN-20014,6100,ACH,74,Completed,0,Known Device,Normal,0
+TXN-20015,9800,Wire,83,Flagged,1,New Device,Geo Mismatch,2
