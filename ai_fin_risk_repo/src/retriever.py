@@ -1,25 +1,29 @@
 from __future__ import annotations
 
-from typing import List, Dict
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from typing import Any
 
 
 class LocalRetriever:
-    def __init__(self, docs: List[Dict[str, str]]):
-        self.docs = docs
-        corpus = [f"{d['title']} {d['content']}" for d in docs]
-        self.vectorizer = TfidfVectorizer(stop_words="english")
-        self.matrix = self.vectorizer.fit_transform(corpus)
+    def __init__(self, documents: list[Any]):
+        self.documents = documents or []
 
-    def search(self, query: str, top_k: int = 2) -> List[Dict[str, str]]:
-        query_vec = self.vectorizer.transform([query])
-        sims = cosine_similarity(query_vec, self.matrix).flatten()
-        ranked_idx = sims.argsort()[::-1][:top_k]
-        results = []
-        for idx in ranked_idx:
-            doc = self.docs[idx].copy()
-            doc["score"] = float(sims[idx])
-            results.append(doc)
-        return results
+    def retrieve(self, query: str, top_k: int = 3) -> list[str]:
+        if not query:
+            return []
+
+        q_terms = set(query.lower().split())
+        scored = []
+
+        for doc in self.documents:
+            if isinstance(doc, dict):
+                text = str(doc.get("text") or doc.get("content") or "")
+            else:
+                text = str(doc)
+
+            text_lower = text.lower()
+            score = sum(1 for term in q_terms if term in text_lower)
+            if score > 0:
+                scored.append((score, text))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [text for _, text in scored[:top_k]]
