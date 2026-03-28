@@ -15,7 +15,7 @@ from src.retriever import LocalRetriever
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
-REQUIRED_MIN_COLUMNS = ["transaction_id", "amount", "payment_type"]
+REQUIRED_MIN_COLUMNS = ["transaction_id", "amount", "payment_type", "risk_score"]
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -78,18 +78,6 @@ def ensure_datetime(df: pd.DataFrame) -> pd.DataFrame:
             if c != "transaction_date":
                 out["transaction_date"] = out[c]
             break
-    return out
-
-
-def ensure_risk_score(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    if "risk_score" not in out.columns:
-        st.warning("risk_score not found. Generating fallback risk scores for demo purposes.")
-        max_amount = out["amount"].max() if "amount" in out.columns and len(out) > 0 else 0
-        if pd.notna(max_amount) and max_amount and max_amount > 0:
-            out["risk_score"] = ((out["amount"] / max_amount) * 100).round(0)
-        else:
-            out["risk_score"] = 0
     return out
 
 
@@ -283,12 +271,25 @@ def derive_investigation_results(question: str, df: pd.DataFrame) -> tuple[str, 
     return "No specific rule matched the question. Showing a sample of current filtered transactions.", result_df.head(25)
 
 
+def render_risk_badge(risk_score: float):
+    if risk_score >= 90:
+        st.error("Critical Risk")
+    elif risk_score >= 80:
+        st.warning("High Risk")
+    elif risk_score >= HIGH_RISK_THRESHOLD:
+        st.info("Medium Risk")
+    else:
+        st.success("Normal")
+
+
 def render_transaction_detail(row: pd.Series):
     st.markdown("### Transaction Detail")
     c1, c2, c3 = st.columns(3)
     c1.metric("Transaction ID", str(row.get("transaction_id", "N/A")))
     c2.metric("Amount", f"${float(row.get('amount', 0) or 0):,.2f}")
     c3.metric("Risk Score", f"{float(row.get('risk_score', 0) or 0):.0f}")
+
+    render_risk_badge(float(row.get("risk_score", 0) or 0))
 
     c4, c5, c6 = st.columns(3)
     c4.write(f"**Payment Type:** {row.get('payment_type', 'N/A')}")
@@ -300,6 +301,43 @@ def render_transaction_detail(row: pd.Series):
         st.write(f"- {signal}")
 
     st.write(f"**Recommended Action:** {get_recommended_action(row)}")
+
+
+def generate_case_notes(result_df: pd.DataFrame) -> str:
+    if len(result_df) == 0:
+        return "No records available for case note generation."
+
+    high_risk_count = int((result_df["risk_score"] >= HIGH_RISK_THRESHOLD).sum()) if "risk_score" in result_df.columns else 0
+    avg_amount = float(result_df["amount"].mean()) if "amount" in result_df.columns else 0.0
+
+    signals = []
+    if "risk_score" in result_df.columns and (result_df["risk_score"] >= HIGH_RISK_THRESHOLD).any():
+        signals.append("elevated risk scores")
+    if "status" in result_df.columns and result_df["status"].astype(str).str.lower().eq("flagged").any():
+        signals.append("flagged transaction status")
+    if "payment_type" in result_df.columns and result_df["payment_type"].astype(str).str.lower().eq("wire").any():
+        signals.append("wire transfer concentration")
+    if "device" in result_df.columns and result_df["device"].astype(str).str.lower().str.contains("new").any():
+        signals.append("new device usage")
+    if "geo" in result_df.columns and result_df["geo"].astype(str).str.lower().str.contains("mismatch").any():
+        signals.append("geo mismatch indicators")
+
+    signal_text = ", ".join(signals) if signals else "standard transaction monitoring signals"
+
+    return f"""Case Summary
+Transactions analyzed: {len(result_df)}
+High-risk transactions: {high_risk_count}
+Average transaction amount: ${avg_amount:,.2f}
+
+Key Observations
+The reviewed set shows {signal_text}. These patterns may indicate elevated fraud or payment risk and should be prioritized for analyst review.
+
+Recommended Action
+- Prioritize high-risk and flagged transactions
+- Validate beneficiary and transaction details for large-value payments
+- Escalate critical-risk items for manual review
+- Review device and location consistency before approval
+"""
 
 
 st.sidebar.markdown("# Dataset")
@@ -319,7 +357,6 @@ try:
 
     df = coerce_numeric(df, ["amount", "risk_score", "fraud_flag", "failed_attempts"])
     df = ensure_datetime(df)
-    df = ensure_risk_score(df)
 
     missing_columns = validate_columns(df)
     if missing_columns:
@@ -391,14 +428,6 @@ with tab1:
             fig = px.bar(status_counts, x="status", y="count", title="Transactions by Status")
             st.plotly_chart(fig, use_container_width=True)
 
-    with st.expander("Data Dictionary"):
-        st.write("- **transaction_id**: unique transaction identifier")
-        st.write("- **amount**: transaction amount")
-        st.write("- **payment_type**: ACH, Wire, Card, RTP, etc.")
-        st.write("- **risk_score**: numeric score indicating risk level")
-        st.write("- **status**: processing or investigation status")
-        st.write("- **fraud_flag**: fraud indicator if available")
-
 with tab2:
     st.markdown("### Transaction Explorer")
 
@@ -449,6 +478,8 @@ with tab3:
 
     question = st.text_input("Ask a question", value=default_prompt, placeholder="Type your investigation question here")
 
+    result_df = pd.DataFrame()
+
     if st.button("Run Investigation", type="primary") or question:
         summary, result_df = derive_investigation_results(question, filtered_df)
 
@@ -475,6 +506,19 @@ with tab3:
                 st.markdown("#### Signals Triggered")
                 for signal in get_risk_signals(top_row):
                     st.write(f"- {signal}")
+
+            st.markdown("#### Generate Case Notes")
+            if st.button("Generate Case Summary"):
+                case_notes = generate_case_notes(result_df)
+                st.text_area("Case Notes", case_notes, height=220)
+
+            csv = result_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download Investigation Report",
+                data=csv,
+                file_name="investigation_report.csv",
+                mime="text/csv",
+            )
         else:
             st.warning("No matching records found for that question.")
 
