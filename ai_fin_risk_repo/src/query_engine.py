@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-from typing import Optional
-
 
 class QueryEngine:
     def __init__(self, retriever=None):
         self.retriever = retriever
 
     def answer(self, question: str) -> str:
-        if not question:
-            return ""
-
-        if self.retriever is None:
+        if not question or self.retriever is None:
             return ""
 
         try:
