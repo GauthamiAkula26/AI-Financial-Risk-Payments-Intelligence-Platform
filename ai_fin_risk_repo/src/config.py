@@ -1,5 +1,5 @@
-APP_TITLE = "AI Financial Risk & Payments Intelligence Platform"
-APP_SUBTITLE = "Decision support for payments, fraud, and risk investigation"
+APP_TITLE = "RiskLens AI"
+APP_SUBTITLE = "AI Financial Risk & Payments Intelligence Platform for payments, fraud, and risk investigation"
 
 from pathlib import Path
 
