@@ -16,18 +16,14 @@ from src.retriever import LocalRetriever
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
-
-# -----------------------------
-# Helpers
-# -----------------------------
-REQUIRED_MIN_COLUMNS = ["transaction_id", "amount", "payment_type", "risk_score"]
+REQUIRED_MIN_COLUMNS = ["transaction_id", "amount", "payment_type"]
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {}
     for col in df.columns:
         c = col.strip().lower()
-        if c in {"txn_id", "txnid", "txnid", "id"}:
+        if c in {"txn_id", "txnid", "id"}:
             rename_map[col] = "transaction_id"
         elif c in {"paymentrail", "rail", "payment_rail"}:
             rename_map[col] = "payment_type"
@@ -37,8 +33,7 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def validate_columns(df: pd.DataFrame) -> list[str]:
-    missing = [c for c in REQUIRED_MIN_COLUMNS if c not in df.columns]
-    return missing
+    return [c for c in REQUIRED_MIN_COLUMNS if c not in df.columns]
 
 
 @st.cache_data
@@ -64,10 +59,6 @@ def build_query_engine():
     return QueryEngine(retriever=retriever)
 
 
-def safe_col(df: pd.DataFrame, col: str, default: Any = None):
-    return df[col] if col in df.columns else default
-
-
 def has_col(df: pd.DataFrame, col: str) -> bool:
     return col in df.columns
 
@@ -88,6 +79,18 @@ def ensure_datetime(df: pd.DataFrame) -> pd.DataFrame:
             if c != "transaction_date":
                 out["transaction_date"] = out[c]
             break
+    return out
+
+
+def ensure_risk_score(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "risk_score" not in out.columns:
+        st.warning("risk_score not found. Generating fallback risk scores for demo purposes.")
+        max_amount = out["amount"].max() if "amount" in out.columns and len(out) > 0 else 0
+        if pd.notna(max_amount) and max_amount and max_amount > 0:
+            out["risk_score"] = ((out["amount"] / max_amount) * 100).round(0)
+        else:
+            out["risk_score"] = 0
     return out
 
 
@@ -176,11 +179,12 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if has_col(filtered, "amount"):
         min_amt = float(filtered["amount"].fillna(0).min())
         max_amt = float(filtered["amount"].fillna(0).max())
+        upper = max_amt if max_amt > min_amt else min_amt + 1
         amount_range = st.sidebar.slider(
             "Amount Range",
             min_value=float(min_amt),
-            max_value=float(max_amt if max_amt > min_amt else min_amt + 1),
-            value=(float(min_amt), float(max_amt if max_amt > min_amt else min_amt + 1)),
+            max_value=float(upper),
+            value=(float(min_amt), float(upper)),
         )
         filtered = filtered[
             filtered["amount"].fillna(0).between(amount_range[0], amount_range[1], inclusive="both")
@@ -189,7 +193,8 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if has_col(filtered, "fraud_flag"):
         fraud_only = st.sidebar.checkbox("Fraud Only")
         if fraud_only:
-            filtered = filtered[filtered["fraud_flag"].astype(str).isin(["1", "True", "true", "Y", "Yes"]) | (filtered["fraud_flag"] == 1)]
+            vals = filtered["fraud_flag"].astype(str)
+            filtered = filtered[vals.isin(["1", "True", "true", "Y", "Yes"]) | (filtered["fraud_flag"] == 1)]
 
     return filtered
 
@@ -254,7 +259,7 @@ def derive_investigation_results(question: str, df: pd.DataFrame) -> tuple[str, 
         high_risk_count = int((result_df["risk_score"] >= HIGH_RISK_THRESHOLD).sum()) if "risk_score" in result_df.columns else 0
         flagged_count = int((result_df["status"].astype(str).str.lower() == "flagged").sum()) if "status" in result_df.columns else 0
         top_payment = None
-        if "payment_type" in result_df.columns:
+        if "payment_type" in result_df.columns and len(result_df) > 0:
             top_payment = result_df["payment_type"].astype(str).value_counts().idxmax()
         summary = (
             f"Dataset summary: {len(result_df)} transactions reviewed, "
@@ -298,16 +303,10 @@ def render_transaction_detail(row: pd.Series):
     st.write(f"**Recommended Action:** {get_recommended_action(row)}")
 
 
-# -----------------------------
-# Sidebar
-# -----------------------------
 st.sidebar.markdown("# Dataset")
 uploaded_file = st.sidebar.file_uploader("Upload transaction CSV", type=["csv"])
 use_sample_data = st.sidebar.checkbox("Use built-in sample dataset", value=True)
 
-# -----------------------------
-# Load data
-# -----------------------------
 try:
     if uploaded_file is not None:
         df = load_uploaded_df(uploaded_file)
@@ -321,6 +320,7 @@ try:
 
     df = coerce_numeric(df, ["amount", "risk_score", "fraud_flag", "failed_attempts"])
     df = ensure_datetime(df)
+    df = ensure_risk_score(df)
 
     missing_columns = validate_columns(df)
     if missing_columns:
@@ -333,13 +333,9 @@ except Exception as e:
 
 filtered_df = filter_dataframe(df)
 
-# engines
 analytics_engine = AnalyticsEngine(filtered_df)
 query_engine = build_query_engine()
 
-# -----------------------------
-# Header
-# -----------------------------
 st.title(APP_TITLE)
 st.caption(APP_SUBTITLE)
 st.write(f"**Loaded dataset:** {dataset_label}")
@@ -348,9 +344,6 @@ tab1, tab2, tab3, tab4 = st.tabs(
     ["📊 Overview", "🔎 Transaction Explorer", "🧠 Investigation Assistant", "📋 Manual Review Queue"]
 )
 
-# -----------------------------
-# Tab 1 - Overview
-# -----------------------------
 with tab1:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Transactions", f"{len(filtered_df):,}")
@@ -420,9 +413,6 @@ with tab1:
         st.write("- **status**: processing or investigation status")
         st.write("- **fraud_flag**: fraud indicator if available")
 
-# -----------------------------
-# Tab 2 - Explorer
-# -----------------------------
 with tab2:
     st.markdown("### Transaction Explorer")
 
@@ -447,9 +437,6 @@ with tab2:
     else:
         st.info("No records match the current filters.")
 
-# -----------------------------
-# Tab 3 - Investigation Assistant
-# -----------------------------
 with tab3:
     st.markdown("### Investigation Assistant")
     st.caption("Ask analyst-style questions about flagged transactions, risk patterns, and review priorities.")
@@ -505,9 +492,6 @@ with tab3:
         else:
             st.warning("No matching records found for that question.")
 
-# -----------------------------
-# Tab 4 - Manual Review Queue
-# -----------------------------
 with tab4:
     st.markdown("### Manual Review Queue")
 
