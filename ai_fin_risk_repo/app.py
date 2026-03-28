@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 import pandas as pd
 import plotly.express as px
@@ -347,10 +346,7 @@ tab1, tab2, tab3, tab4 = st.tabs(
 with tab1:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Transactions", f"{len(filtered_df):,}")
-    c2.metric(
-        "High Risk",
-        f"{len(filtered_df[filtered_df['risk_score'] >= HIGH_RISK_THRESHOLD]):,}",
-    )
+    c2.metric("High Risk", f"{len(filtered_df[filtered_df['risk_score'] >= HIGH_RISK_THRESHOLD]):,}")
     fraud_total = int(filtered_df["fraud_flag"].fillna(0).sum()) if "fraud_flag" in filtered_df.columns else 0
     c3.metric("Fraud Cases", f"{fraud_total:,}")
     avg_amt = filtered_df["amount"].mean() if "amount" in filtered_df.columns else 0
@@ -366,21 +362,11 @@ with tab1:
                 .reset_index()
                 .sort_values("fraud_flag", ascending=False)
             )
-            fig = px.bar(
-                fraud_by_type,
-                x="payment_type",
-                y="fraud_flag",
-                title="Fraud Cases by Payment Type",
-            )
+            fig = px.bar(fraud_by_type, x="payment_type", y="fraud_flag", title="Fraud Cases by Payment Type")
             st.plotly_chart(fig, use_container_width=True)
 
         if "risk_score" in filtered_df.columns:
-            fig = px.histogram(
-                filtered_df,
-                x="risk_score",
-                nbins=20,
-                title="Risk Score Distribution",
-            )
+            fig = px.histogram(filtered_df, x="risk_score", nbins=20, title="Risk Score Distribution")
             st.plotly_chart(fig, use_container_width=True)
 
     with right:
