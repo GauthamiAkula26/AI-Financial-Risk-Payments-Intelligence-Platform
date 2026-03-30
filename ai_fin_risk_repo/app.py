@@ -1,195 +1,302 @@
 from __future__ import annotations
 
-import re
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from src.analytics import AnalyticsEngine
-from src.config import APP_SUBTITLE, APP_TITLE, DEFAULT_DATA_PATH, HIGH_RISK_THRESHOLD
-from src.data_loader import load_transactions
+from src.config import (
+    APP_SUBTITLE,
+    APP_TITLE,
+    DEFAULT_DATA_PATH,
+    HIGH_RISK_THRESHOLD,
+    ROLE_OPTIONS,
+    PAGE_OPTIONS,
+    REQUIRED_COLUMNS,
+)
 from src.knowledge_base import KNOWLEDGE_DOCS
 from src.query_engine import QueryEngine
 from src.retriever import LocalRetriever
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
-REQUIRED_MIN_COLUMNS = ["transaction_id", "amount", "payment_type", "risk_score"]
+
+def apply_custom_css() -> None:
+    st.markdown(
+        """
+        <style>
+        .main {background-color: #f6f8fb;}
+        .block-container {padding-top: 1.2rem; padding-bottom: 1rem;}
+        .rl-card {
+            background: white;
+            padding: 16px 18px;
+            border-radius: 18px;
+            border: 1px solid #e9eef5;
+            box-shadow: 0 1px 2px rgba(16,24,40,.04);
+            margin-bottom: 12px;
+        }
+        .rl-title {
+            font-size: 2.4rem;
+            font-weight: 800;
+            color: #182230;
+            margin-bottom: 0.2rem;
+        }
+        .rl-subtitle {
+            color: #667085;
+            margin-bottom: 1rem;
+        }
+        .rl-kpi-label {
+            color: #667085;
+            font-size: 0.9rem;
+            margin-bottom: 4px;
+        }
+        .rl-kpi-value {
+            font-size: 1.7rem;
+            font-weight: 700;
+            color: #101828;
+        }
+        .rl-kpi-delta {
+            color: #475467;
+            font-size: 0.85rem;
+            margin-top: 4px;
+        }
+        .rl-section {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #182230;
+            margin: 0.2rem 0 0.8rem 0;
+        }
+        .rl-badge {
+            display: inline-block;
+            padding: 0.25rem 0.55rem;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-right: 6px;
+            margin-bottom: 6px;
+        }
+        .rl-badge-red {background:#fee4e2;color:#b42318;}
+        .rl-badge-amber {background:#fef0c7;color:#b54708;}
+        .rl-badge-green {background:#dcfae6;color:#067647;}
+        .rl-badge-blue {background:#d1e9ff;color:#175cd3;}
+        .rl-small {
+            color:#667085;
+            font-size:0.9rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def load_transactions(path: str | None = None, uploaded_file=None) -> pd.DataFrame:
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_csv(path or DEFAULT_DATA_PATH)
+    return normalize_columns(df)
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {}
     for col in df.columns:
         c = col.strip().lower()
-        if c in {"txn_id", "txnid", "id"}:
+        if c in {"txn_id", "id"}:
             rename_map[col] = "transaction_id"
-        elif c in {"paymentrail", "rail", "payment_rail"}:
-            rename_map[col] = "payment_type"
-        elif c in {"fraud", "is_fraud", "fraudlabel", "fraud_label"}:
-            rename_map[col] = "fraud_flag"
-    return df.rename(columns=rename_map)
+        elif c in {"paymentrail", "rail"}:
+            rename_map[col] = "payment_rail"
+        elif c in {"fraud", "fraud_flag"}:
+            rename_map[col] = "is_fraud_label"
+    df = df.rename(columns=rename_map)
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].astype(str).str.strip()
+    return df
 
 
-def validate_columns(df: pd.DataFrame) -> list[str]:
-    return [c for c in REQUIRED_MIN_COLUMNS if c not in df.columns]
+def validate_dataframe(df: pd.DataFrame) -> list[str]:
+    return [c for c in REQUIRED_COLUMNS if c not in df.columns]
 
 
-@st.cache_data
-def load_default_df() -> pd.DataFrame:
-    df = load_transactions(DEFAULT_DATA_PATH)
-    return normalize_columns(df)
+def coerce_types(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    numeric_cols = [
+        "amount",
+        "risk_score",
+        "is_fraud_label",
+        "geo_mismatch_flag",
+        "velocity_flag",
+        "beneficiary_change_flag",
+        "customer_txn_count_24h",
+        "historical_customer_avg_amount",
+    ]
+    for c in numeric_cols:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0)
 
+    if "timestamp" in out.columns:
+        out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
 
-@st.cache_data
-def load_uploaded_df(file) -> pd.DataFrame:
-    df = pd.read_csv(file)
-    return normalize_columns(df)
+    return out
 
 
 @st.cache_resource
-def build_retriever():
-    return LocalRetriever(KNOWLEDGE_DOCS)
-
-
-@st.cache_resource
-def build_query_engine():
-    retriever = build_retriever()
+def build_query_engine() -> QueryEngine:
+    retriever = LocalRetriever(KNOWLEDGE_DOCS)
     return QueryEngine(retriever=retriever)
 
 
-def has_col(df: pd.DataFrame, col: str) -> bool:
-    return col in df.columns
+def render_header(role: str) -> None:
+    st.markdown(f"<div class='rl-title'>{APP_TITLE}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='rl-subtitle'>{APP_SUBTITLE}</div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='rl-small'><b>Current role view:</b> {role}</div>",
+        unsafe_allow_html=True,
+    )
 
 
-def coerce_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    out = df.copy()
-    for c in cols:
-        if c in out.columns:
-            out[c] = pd.to_numeric(out[c], errors="coerce")
-    return out
+def render_kpi_card(label: str, value: str, delta: str = "") -> None:
+    st.markdown(
+        f"""
+        <div class="rl-card">
+            <div class="rl-kpi-label">{label}</div>
+            <div class="rl-kpi-value">{value}</div>
+            <div class="rl-kpi-delta">{delta}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
-def ensure_datetime(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    for c in ["transaction_date", "date", "created_at", "timestamp"]:
-        if c in out.columns:
-            out[c] = pd.to_datetime(out[c], errors="coerce")
-            if c != "transaction_date":
-                out["transaction_date"] = out[c]
-            break
-    return out
-
-
-def get_risk_signals(row: pd.Series) -> list[str]:
-    signals = []
-
-    risk_score = float(row.get("risk_score", 0) or 0)
-    amount = float(row.get("amount", 0) or 0)
-    status = str(row.get("status", "")).lower()
-    payment_type = str(row.get("payment_type", "")).lower()
-    device = str(row.get("device", "")).lower()
-    geo = str(row.get("geo", row.get("geography", ""))).lower()
-    failed_count = float(row.get("failed_attempts", 0) or 0)
-
-    if risk_score >= HIGH_RISK_THRESHOLD:
-        signals.append("High risk score")
-    if amount >= 10000:
-        signals.append("High amount")
-    if status == "flagged":
-        signals.append("Flagged status")
-    if payment_type == "wire":
-        signals.append("Wire transfer risk")
-    if "new" in device:
-        signals.append("New device")
-    if "mismatch" in geo:
-        signals.append("Geo mismatch")
-    if failed_count >= 2:
-        signals.append("Repeated failed attempts")
-
-    return signals or ["Standard monitoring"]
-
-
-def get_recommended_action(row: pd.Series) -> str:
-    risk = float(row.get("risk_score", 0) or 0)
-    amount = float(row.get("amount", 0) or 0)
-    payment_type = str(row.get("payment_type", "")).lower()
-
-    if risk >= 90:
-        return "Escalate immediately and hold transaction"
-    if risk >= 80:
-        return "Send for manual review"
-    if risk >= HIGH_RISK_THRESHOLD:
-        return "Review supporting signals"
-    if payment_type == "wire" and amount >= 10000:
-        return "Validate beneficiary and approval chain"
-    if amount >= 10000:
-        return "Validate transaction details"
-    return "Monitor"
-
-
-def get_priority(risk_score: float) -> str:
-    if risk_score >= 90:
-        return "Critical"
-    if risk_score >= 80:
-        return "High"
-    if risk_score >= HIGH_RISK_THRESHOLD:
-        return "Medium"
-    return "Low"
-
-
-def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+def add_filter_sidebar(df: pd.DataFrame) -> pd.DataFrame:
+    st.sidebar.markdown("## Filters")
     filtered = df.copy()
 
-    st.sidebar.markdown("## Risk Filters")
+    if "payment_rail" in filtered.columns:
+        rails = sorted(filtered["payment_rail"].dropna().unique().tolist())
+        selected_rails = st.sidebar.multiselect("Payment Rail", rails)
+        if selected_rails:
+            filtered = filtered[filtered["payment_rail"].isin(selected_rails)]
 
-    if has_col(filtered, "payment_type"):
-        payment_options = sorted(filtered["payment_type"].dropna().astype(str).unique().tolist())
-        selected_payment_types = st.sidebar.multiselect("Payment Type", payment_options)
-        if selected_payment_types:
-            filtered = filtered[filtered["payment_type"].astype(str).isin(selected_payment_types)]
+    if "channel" in filtered.columns:
+        channels = sorted(filtered["channel"].dropna().unique().tolist())
+        selected_channels = st.sidebar.multiselect("Channel", channels)
+        if selected_channels:
+            filtered = filtered[filtered["channel"].isin(selected_channels)]
 
-    if has_col(filtered, "status"):
-        status_options = sorted(filtered["status"].dropna().astype(str).unique().tolist())
-        selected_status = st.sidebar.multiselect("Status", status_options)
-        if selected_status:
-            filtered = filtered[filtered["status"].astype(str).isin(selected_status)]
+    if "status" in filtered.columns:
+        statuses = sorted(filtered["status"].dropna().unique().tolist())
+        selected_statuses = st.sidebar.multiselect("Status", statuses)
+        if selected_statuses:
+            filtered = filtered[filtered["status"].isin(selected_statuses)]
 
-    if has_col(filtered, "risk_score"):
-        min_risk = int(filtered["risk_score"].fillna(0).min())
-        max_risk = int(filtered["risk_score"].fillna(100).max())
+    if "risk_score" in filtered.columns:
+        min_risk = int(filtered["risk_score"].min())
+        max_risk = int(filtered["risk_score"].max())
         risk_range = st.sidebar.slider("Risk Score", min_risk, max_risk, (min_risk, max_risk))
         filtered = filtered[
-            filtered["risk_score"].fillna(0).between(risk_range[0], risk_range[1], inclusive="both")
+            filtered["risk_score"].between(risk_range[0], risk_range[1], inclusive="both")
         ]
 
-    if has_col(filtered, "amount"):
-        min_amt = float(filtered["amount"].fillna(0).min())
-        max_amt = float(filtered["amount"].fillna(0).max())
-        upper = max_amt if max_amt > min_amt else min_amt + 1
-        amount_range = st.sidebar.slider(
+    if "amount" in filtered.columns:
+        min_amt = float(filtered["amount"].min())
+        max_amt = float(filtered["amount"].max())
+        amt_range = st.sidebar.slider(
             "Amount Range",
             min_value=float(min_amt),
-            max_value=float(upper),
-            value=(float(min_amt), float(upper)),
+            max_value=float(max_amt),
+            value=(float(min_amt), float(max_amt)),
         )
         filtered = filtered[
-            filtered["amount"].fillna(0).between(amount_range[0], amount_range[1], inclusive="both")
+            filtered["amount"].between(amt_range[0], amt_range[1], inclusive="both")
         ]
 
-    if has_col(filtered, "fraud_flag"):
-        fraud_only = st.sidebar.checkbox("Fraud Only")
-        if fraud_only:
-            vals = filtered["fraud_flag"].astype(str)
-            filtered = filtered[vals.isin(["1", "True", "true", "Y", "Yes"]) | (filtered["fraud_flag"] == 1)]
+    fraud_only = st.sidebar.checkbox("Fraud Only")
+    if fraud_only and "is_fraud_label" in filtered.columns:
+        filtered = filtered[filtered["is_fraud_label"] == 1]
 
     return filtered
 
 
-def find_transaction(df: pd.DataFrame, transaction_id: str) -> pd.DataFrame:
-    if not transaction_id or "transaction_id" not in df.columns:
-        return pd.DataFrame()
-    return df[df["transaction_id"].astype(str).str.lower() == transaction_id.strip().lower()]
+def get_priority(score: float) -> str:
+    if score >= 90:
+        return "Critical"
+    if score >= 80:
+        return "High"
+    if score >= HIGH_RISK_THRESHOLD:
+        return "Medium"
+    return "Low"
+
+
+def get_risk_signals(row: pd.Series) -> list[str]:
+    signals: list[str] = []
+    if row.get("risk_score", 0) >= HIGH_RISK_THRESHOLD:
+        signals.append("High risk score")
+    if row.get("amount", 0) >= 10000:
+        signals.append("Large amount")
+    if row.get("geo_mismatch_flag", 0) == 1:
+        signals.append("Geo mismatch")
+    if row.get("velocity_flag", 0) == 1:
+        signals.append("Velocity spike")
+    if row.get("beneficiary_change_flag", 0) == 1:
+        signals.append("Beneficiary changed")
+    if str(row.get("status", "")).lower() == "flagged":
+        signals.append("Flagged status")
+    if str(row.get("payment_rail", "")).lower() == "wire":
+        signals.append("Wire rail sensitivity")
+    return signals or ["Standard monitoring"]
+
+
+def get_recommended_action(row: pd.Series) -> str:
+    score = float(row.get("risk_score", 0))
+    amount = float(row.get("amount", 0))
+    if score >= 90:
+        return "Block or escalate immediately"
+    if score >= 80:
+        return "Send for manual review"
+    if score >= HIGH_RISK_THRESHOLD:
+        return "Review customer and payment context"
+    if amount >= 10000:
+        return "Validate payment details"
+    return "Approve with monitoring"
+
+
+def render_priority_badge(priority: str) -> None:
+    if priority == "Critical":
+        cls = "rl-badge rl-badge-red"
+    elif priority == "High":
+        cls = "rl-badge rl-badge-amber"
+    elif priority == "Medium":
+        cls = "rl-badge rl-badge-blue"
+    else:
+        cls = "rl-badge rl-badge-green"
+    st.markdown(f"<span class='{cls}'>{priority}</span>", unsafe_allow_html=True)
+
+
+def generate_case_notes(result_df: pd.DataFrame) -> str:
+    if result_df.empty:
+        return "No records available for case note generation."
+
+    top_rail = result_df["payment_rail"].mode().iloc[0] if "payment_rail" in result_df.columns else "N/A"
+    high_risk = int((result_df["risk_score"] >= HIGH_RISK_THRESHOLD).sum())
+    fraud_count = int(result_df["is_fraud_label"].sum()) if "is_fraud_label" in result_df.columns else 0
+    avg_amount = float(result_df["amount"].mean()) if "amount" in result_df.columns else 0.0
+
+    return f"""Case Summary
+Transactions analyzed: {len(result_df)}
+High-risk transactions: {high_risk}
+Fraud-labelled transactions: {fraud_count}
+Average amount: ${avg_amount:,.2f}
+Dominant payment rail: {top_rail}
+
+Assessment
+The reviewed set shows elevated payment risk indicators across rail behavior, risk score distribution, and transaction context. Highest attention should be placed on large-value and flagged items.
+
+Recommended Actions
+- Prioritize critical and high-risk transactions
+- Validate customer, beneficiary, and channel context
+- Escalate flagged wire transactions
+- Capture analyst notes for audit trail
+"""
 
 
 def derive_investigation_results(question: str, df: pd.DataFrame) -> tuple[str, pd.DataFrame]:
@@ -199,362 +306,464 @@ def derive_investigation_results(question: str, df: pd.DataFrame) -> tuple[str, 
 
     result_df = df.copy()
 
-    tx_match = re.search(r"(txn[-\s]?\d+)", q, re.IGNORECASE)
-    if tx_match and "transaction_id" in result_df.columns:
-        txid = tx_match.group(1).replace(" ", "").upper()
-        result_df = result_df[result_df["transaction_id"].astype(str).str.upper() == txid]
-        if len(result_df) > 0:
-            row = result_df.iloc[0]
-            signals = ", ".join(get_risk_signals(row))
-            action = get_recommended_action(row)
-            summary = (
-                f"Transaction {txid} appears in the dataset with risk score "
-                f"{row.get('risk_score', 'N/A')}. Signals: {signals}. "
-                f"Recommended action: {action}."
-            )
-            return summary, result_df
-
-    if "high-risk ach" in q or ("high" in q and "ach" in q):
-        if "payment_type" in result_df.columns:
-            result_df = result_df[result_df["payment_type"].astype(str).str.lower() == "ach"]
-        if "risk_score" in result_df.columns:
-            result_df = result_df[result_df["risk_score"] >= HIGH_RISK_THRESHOLD]
-        return f"Found {len(result_df)} high-risk ACH transactions.", result_df.head(50)
-
-    if "manual review" in q:
-        if "risk_score" in result_df.columns:
-            result_df = result_df[result_df["risk_score"] >= HIGH_RISK_THRESHOLD]
-        return f"Found {len(result_df)} transactions that may need manual review.", result_df.head(50)
-
-    if "highest fraud rate" in q or "most fraud" in q:
-        if "payment_type" in result_df.columns and "fraud_flag" in result_df.columns:
-            grouped = (
-                result_df.groupby("payment_type", dropna=False)["fraud_flag"]
-                .mean()
-                .reset_index()
-                .sort_values("fraud_flag", ascending=False)
-            )
-            if len(grouped) > 0:
-                top = grouped.iloc[0]
+    if "txn-" in q and "transaction_id" in result_df.columns:
+        words = q.replace("?", "").split()
+        txn_ids = [w.upper() for w in words if w.upper().startswith("TXN-")]
+        if txn_ids:
+            txid = txn_ids[0]
+            result_df = result_df[result_df["transaction_id"].str.upper() == txid]
+            if not result_df.empty:
+                row = result_df.iloc[0]
                 return (
-                    f"{top['payment_type']} has the highest fraud rate in the current dataset "
-                    f"at {top['fraud_flag']:.2%}.",
-                    grouped,
+                    f"{txid} is scored at {int(row['risk_score'])}. Signals: {', '.join(get_risk_signals(row))}. "
+                    f"Recommended action: {get_recommended_action(row)}.",
+                    result_df,
                 )
 
-    if "suspicious pattern" in q or "summarize" in q:
-        high_risk_count = int((result_df["risk_score"] >= HIGH_RISK_THRESHOLD).sum()) if "risk_score" in result_df.columns else 0
-        flagged_count = int((result_df["status"].astype(str).str.lower() == "flagged").sum()) if "status" in result_df.columns else 0
-        top_payment = None
-        if "payment_type" in result_df.columns and len(result_df) > 0:
-            top_payment = result_df["payment_type"].astype(str).value_counts().idxmax()
-        summary = (
-            f"Dataset summary: {len(result_df)} transactions reviewed, "
-            f"{high_risk_count} high-risk transactions, "
-            f"{flagged_count} flagged items"
+    if "high-risk ach" in q or "high risk ach" in q:
+        result_df = result_df[
+            (result_df["payment_rail"].str.lower() == "ach")
+            & (result_df["risk_score"] >= HIGH_RISK_THRESHOLD)
+        ]
+        return f"Found {len(result_df)} high-risk ACH transactions.", result_df
+
+    if "highest fraud rate" in q or "most fraud" in q:
+        grouped = (
+            result_df.groupby("payment_rail", dropna=False)["is_fraud_label"]
+            .mean()
+            .reset_index()
+            .sort_values("is_fraud_label", ascending=False)
         )
-        if top_payment:
-            summary += f", with {top_payment} as the most common payment type."
-        summary += " Review high-risk and flagged items first."
-        return summary, result_df.head(25)
+        if not grouped.empty:
+            top = grouped.iloc[0]
+            return (
+                f"{top['payment_rail']} has the highest fraud rate at {top['is_fraud_label']:.2%}.",
+                grouped,
+            )
 
-    if "high-risk" in q or "high risk" in q:
-        if "risk_score" in result_df.columns:
-            result_df = result_df[result_df["risk_score"] >= HIGH_RISK_THRESHOLD]
-        return f"Found {len(result_df)} high-risk transactions.", result_df.head(50)
+    if "manual review" in q:
+        result_df = result_df[result_df["risk_score"] >= HIGH_RISK_THRESHOLD]
+        return f"Found {len(result_df)} transactions requiring review.", result_df
 
-    if "flagged" in q:
-        if "status" in result_df.columns:
-            result_df = result_df[result_df["status"].astype(str).str.lower() == "flagged"]
-        return f"Found {len(result_df)} flagged transactions.", result_df.head(50)
+    if "summarize" in q or "pattern" in q:
+        flagged = int((result_df["status"].str.lower() == "flagged").sum())
+        high_risk = int((result_df["risk_score"] >= HIGH_RISK_THRESHOLD).sum())
+        top_rail = result_df["payment_rail"].mode().iloc[0]
+        return (
+            f"Summary: {len(result_df)} transactions, {high_risk} high-risk, {flagged} flagged. "
+            f"Most active rail: {top_rail}.",
+            result_df.head(25),
+        )
 
-    return "No specific rule matched the question. Showing a sample of current filtered transactions.", result_df.head(25)
-
-
-def render_risk_badge(risk_score: float):
-    if risk_score >= 90:
-        st.error("Critical Risk")
-    elif risk_score >= 80:
-        st.warning("High Risk")
-    elif risk_score >= HIGH_RISK_THRESHOLD:
-        st.info("Medium Risk")
-    else:
-        st.success("Normal")
+    return "No exact pattern matched. Showing a sample of filtered transactions.", result_df.head(25)
 
 
-def render_transaction_detail(row: pd.Series):
-    st.markdown("### Transaction Detail")
+def render_transaction_detail(row: pd.Series) -> None:
+    st.markdown("### Selected Transaction")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Transaction ID", str(row.get("transaction_id", "N/A")))
-    c2.metric("Amount", f"${float(row.get('amount', 0) or 0):,.2f}")
-    c3.metric("Risk Score", f"{float(row.get('risk_score', 0) or 0):.0f}")
+    c1.metric("Transaction ID", row["transaction_id"])
+    c2.metric("Amount", f"${row['amount']:,.2f}")
+    c3.metric("Risk Score", int(row["risk_score"]))
 
-    render_risk_badge(float(row.get("risk_score", 0) or 0))
+    priority = get_priority(float(row["risk_score"]))
+    render_priority_badge(priority)
 
-    c4, c5, c6 = st.columns(3)
-    c4.write(f"**Payment Type:** {row.get('payment_type', 'N/A')}")
-    c5.write(f"**Status:** {row.get('status', 'N/A')}")
-    c6.write(f"**Priority:** {get_priority(float(row.get('risk_score', 0) or 0))}")
+    a, b, c = st.columns(3)
+    a.write(f"**Customer ID:** {row.get('customer_id', 'N/A')}")
+    b.write(f"**Rail:** {row.get('payment_rail', 'N/A')}")
+    c.write(f"**Channel:** {row.get('channel', 'N/A')}")
 
-    st.write("**Signals Triggered:**")
-    for signal in get_risk_signals(row):
-        st.write(f"- {signal}")
+    d, e, f = st.columns(3)
+    d.write(f"**Currency:** {row.get('currency', 'N/A')}")
+    e.write(f"**Status:** {row.get('status', 'N/A')}")
+    f.write(f"**Direction:** {row.get('direction', 'N/A')}")
 
-    st.write(f"**Recommended Action:** {get_recommended_action(row)}")
+    st.markdown("#### Signals")
+    for s in get_risk_signals(row):
+        st.write(f"- {s}")
 
-
-def generate_case_notes(result_df: pd.DataFrame) -> str:
-    if len(result_df) == 0:
-        return "No records available for case note generation."
-
-    high_risk_count = int((result_df["risk_score"] >= HIGH_RISK_THRESHOLD).sum()) if "risk_score" in result_df.columns else 0
-    avg_amount = float(result_df["amount"].mean()) if "amount" in result_df.columns else 0.0
-
-    signals = []
-    if "risk_score" in result_df.columns and (result_df["risk_score"] >= HIGH_RISK_THRESHOLD).any():
-        signals.append("elevated risk scores")
-    if "status" in result_df.columns and result_df["status"].astype(str).str.lower().eq("flagged").any():
-        signals.append("flagged transaction status")
-    if "payment_type" in result_df.columns and result_df["payment_type"].astype(str).str.lower().eq("wire").any():
-        signals.append("wire transfer concentration")
-    if "device" in result_df.columns and result_df["device"].astype(str).str.lower().str.contains("new").any():
-        signals.append("new device usage")
-    if "geo" in result_df.columns and result_df["geo"].astype(str).str.lower().str.contains("mismatch").any():
-        signals.append("geo mismatch indicators")
-
-    signal_text = ", ".join(signals) if signals else "standard transaction monitoring signals"
-
-    return f"""Case Summary
-Transactions analyzed: {len(result_df)}
-High-risk transactions: {high_risk_count}
-Average transaction amount: ${avg_amount:,.2f}
-
-Key Observations
-The reviewed set shows {signal_text}. These patterns may indicate elevated fraud or payment risk and should be prioritized for analyst review.
-
-Recommended Action
-- Prioritize high-risk and flagged transactions
-- Validate beneficiary and transaction details for large-value payments
-- Escalate critical-risk items for manual review
-- Review device and location consistency before approval
-"""
+    st.markdown("#### Recommended Action")
+    st.success(get_recommended_action(row))
 
 
-st.sidebar.markdown("# Dataset")
-uploaded_file = st.sidebar.file_uploader("Upload transaction CSV", type=["csv"])
-use_sample_data = st.sidebar.checkbox("Use built-in sample dataset", value=True)
+def render_command_center(df: pd.DataFrame, role: str) -> None:
+    st.markdown("<div class='rl-section'>Command Center</div>", unsafe_allow_html=True)
 
-try:
-    if uploaded_file is not None:
-        df = load_uploaded_df(uploaded_file)
-        dataset_label = f"Uploaded file: {uploaded_file.name}"
-    elif use_sample_data:
-        df = load_default_df()
-        dataset_label = "Built-in sample dataset"
-    else:
-        st.warning("Upload a CSV or enable the sample dataset.")
-        st.stop()
+    total_volume = len(df)
+    approval_rate = (
+        (df["status"].str.lower() == "completed").mean() * 100 if "status" in df.columns else 0
+    )
+    review_queue = int((df["risk_score"] >= HIGH_RISK_THRESHOLD).sum())
+    fraud_rate = df["is_fraud_label"].mean() * 100 if "is_fraud_label" in df.columns else 0
+    failure_rate = (
+        (df["status"].str.lower().isin(["failed", "flagged"])).mean() * 100
+        if "status" in df.columns
+        else 0
+    )
+    top_risk_rail = (
+        df.groupby("payment_rail")["risk_score"].mean().sort_values(ascending=False).index[0]
+        if "payment_rail" in df.columns
+        else "N/A"
+    )
 
-    df = coerce_numeric(df, ["amount", "risk_score", "fraud_flag", "failed_attempts"])
-    df = ensure_datetime(df)
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    with k1:
+        render_kpi_card("Total Volume", f"{total_volume:,}")
+    with k2:
+        render_kpi_card("Approval Rate", f"{approval_rate:.1f}%")
+    with k3:
+        render_kpi_card("Review Queue", f"{review_queue:,}")
+    with k4:
+        render_kpi_card("Failure Rate", f"{failure_rate:.1f}%")
+    with k5:
+        render_kpi_card("Fraud Rate", f"{fraud_rate:.1f}%")
+    with k6:
+        render_kpi_card("Top Risk Rail", top_risk_rail)
 
-    missing_columns = validate_columns(df)
-    if missing_columns:
-        st.error(f"Missing required columns: {', '.join(missing_columns)}")
-        st.stop()
+    c1, c2 = st.columns([1.1, 1])
 
-except Exception as e:
-    st.error(f"Unable to load dataset: {e}")
-    st.stop()
+    with c1:
+        rail_stats = (
+            df.groupby("payment_rail")
+            .agg(
+                transactions=("transaction_id", "count"),
+                avg_risk=("risk_score", "mean"),
+                fraud_rate=("is_fraud_label", "mean"),
+            )
+            .reset_index()
+        )
+        rail_stats["fraud_rate"] = rail_stats["fraud_rate"] * 100
+        fig = px.bar(
+            rail_stats,
+            x="payment_rail",
+            y="avg_risk",
+            color="fraud_rate",
+            title="Payment Rail Risk Intelligence",
+            labels={"avg_risk": "Average Risk Score", "fraud_rate": "Fraud Rate %"},
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-filtered_df = filter_dataframe(df)
+    with c2:
+        status_counts = (
+            df.groupby("status", dropna=False)
+            .size()
+            .reset_index(name="count")
+            .sort_values("count", ascending=False)
+        )
+        fig2 = px.pie(status_counts, names="status", values="count", title="Status Mix")
+        st.plotly_chart(fig2, use_container_width=True)
 
-analytics_engine = AnalyticsEngine(filtered_df)
-query_engine = build_query_engine()
+    d1, d2 = st.columns(2)
+    with d1:
+        fig3 = px.scatter(
+            df,
+            x="amount",
+            y="risk_score",
+            color="payment_rail",
+            hover_data=["transaction_id", "customer_id", "channel"],
+            title="Amount vs Risk Score",
+        )
+        st.plotly_chart(fig3, use_container_width=True)
 
-st.title(APP_TITLE)
-st.caption(APP_SUBTITLE)
-st.write(f"**Loaded dataset:** {dataset_label}")
+    with d2:
+        geo_view = (
+            df.groupby(["origin_country", "destination_country"], dropna=False)
+            .agg(avg_risk=("risk_score", "mean"), txns=("transaction_id", "count"))
+            .reset_index()
+        )
+        geo_view["corridor"] = geo_view["origin_country"] + " → " + geo_view["destination_country"]
+        fig4 = px.bar(
+            geo_view.sort_values("avg_risk", ascending=False).head(8),
+            x="corridor",
+            y="avg_risk",
+            hover_data=["txns"],
+            title="Top Risk Corridors",
+        )
+        st.plotly_chart(fig4, use_container_width=True)
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["📊 Overview", "🔎 Transaction Explorer", "🧠 Investigation Assistant", "📋 Manual Review Queue"]
-)
+    if role == "Product Manager":
+        st.info(
+            "Product view: focus on rail-level friction, fraud concentration, and approval-rate tradeoffs."
+        )
+    elif role == "Payments Ops Manager":
+        st.info(
+            "Ops view: focus on exception load, flagged queue, and payment rail performance."
+        )
+    elif role == "Compliance Reviewer":
+        st.info(
+            "Compliance view: focus on alert rationale, audit trail, and repeat high-risk behavior."
+        )
 
-with tab1:
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Transactions", f"{len(filtered_df):,}")
-    c2.metric("High Risk", f"{len(filtered_df[filtered_df['risk_score'] >= HIGH_RISK_THRESHOLD]):,}")
-    fraud_total = int(filtered_df["fraud_flag"].fillna(0).sum()) if "fraud_flag" in filtered_df.columns else 0
-    c3.metric("Fraud Cases", f"{fraud_total:,}")
-    avg_amt = filtered_df["amount"].mean() if "amount" in filtered_df.columns else 0
-    c4.metric("Avg Amount", f"${avg_amt:,.2f}")
 
-    left, right = st.columns(2)
+def render_investigations(df: pd.DataFrame, query_engine: QueryEngine) -> None:
+    st.markdown("<div class='rl-section'>Investigations</div>", unsafe_allow_html=True)
+
+    left, right = st.columns([1.25, 0.85])
 
     with left:
-        if "payment_type" in filtered_df.columns and "fraud_flag" in filtered_df.columns:
-            fraud_by_type = (
-                filtered_df.groupby("payment_type", dropna=False)["fraud_flag"]
-                .sum()
-                .reset_index()
-                .sort_values("fraud_flag", ascending=False)
-            )
-            fig = px.bar(fraud_by_type, x="payment_type", y="fraud_flag", title="Fraud Cases by Payment Type")
-            st.plotly_chart(fig, use_container_width=True)
+        st.markdown("#### Investigation Assistant")
+        e1, e2, e3, e4 = st.columns(4)
+        if e1.button("Why was TXN-30002 flagged?"):
+            st.session_state["prompt"] = "Why was TXN-30002 flagged?"
+        if e2.button("Show high-risk ACH transactions"):
+            st.session_state["prompt"] = "Show high-risk ACH transactions"
+        if e3.button("Which payment rail has highest fraud rate?"):
+            st.session_state["prompt"] = "Which payment rail has highest fraud rate?"
+        if e4.button("Summarize suspicious patterns"):
+            st.session_state["prompt"] = "Summarize suspicious patterns"
 
-        if "risk_score" in filtered_df.columns:
-            fig = px.histogram(filtered_df, x="risk_score", nbins=20, title="Risk Score Distribution")
-            st.plotly_chart(fig, use_container_width=True)
+        prompt = st.text_input(
+            "Ask a question",
+            value=st.session_state.get("prompt", ""),
+            placeholder="Type analyst-style investigation prompt",
+        )
+
+        if st.button("Run Investigation", type="primary") or prompt:
+            summary, result_df = derive_investigation_results(prompt, df)
+            st.markdown("##### Findings")
+            st.info(summary)
+
+            kb = query_engine.answer(prompt)
+            if kb:
+                st.markdown("##### Knowledge Context")
+                st.write(kb)
+
+            st.markdown("##### Matching Records")
+            st.dataframe(result_df, use_container_width=True, height=300)
+
+            if not result_df.empty:
+                st.markdown("##### Case Notes Generator")
+                notes = generate_case_notes(result_df)
+                st.text_area("Analyst Case Notes", notes, height=220)
+
+                csv = result_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download Investigation Report",
+                    data=csv,
+                    file_name="investigation_report.csv",
+                    mime="text/csv",
+                )
+
+                st.session_state["investigation_result"] = result_df
 
     with right:
-        if "amount" in filtered_df.columns and "risk_score" in filtered_df.columns:
-            fig = px.scatter(
-                filtered_df,
-                x="amount",
-                y="risk_score",
-                color="payment_type" if "payment_type" in filtered_df.columns else None,
-                title="Amount vs Risk Score",
-                hover_data=["transaction_id"] if "transaction_id" in filtered_df.columns else None,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        if "status" in filtered_df.columns:
-            status_counts = (
-                filtered_df.groupby("status", dropna=False)
-                .size()
-                .reset_index(name="count")
-                .sort_values("count", ascending=False)
-            )
-            fig = px.bar(status_counts, x="status", y="count", title="Transactions by Status")
-            st.plotly_chart(fig, use_container_width=True)
-
-with tab2:
-    st.markdown("### Transaction Explorer")
-
-    search_txn = st.text_input("Search by Transaction ID")
-    explorer_df = filtered_df.copy()
-
-    if search_txn:
-        explorer_df = find_transaction(explorer_df, search_txn)
-
-    st.dataframe(explorer_df, use_container_width=True, height=420)
-
-    if len(explorer_df) > 0:
-        selected_index = st.number_input(
-            "Select row number to inspect",
-            min_value=0,
-            max_value=max(len(explorer_df) - 1, 0),
-            value=0,
-            step=1,
-        )
-        selected_row = explorer_df.reset_index(drop=True).iloc[int(selected_index)]
-        render_transaction_detail(selected_row)
-    else:
-        st.info("No records match the current filters.")
-
-with tab3:
-    st.markdown("### Investigation Assistant")
-    st.caption("Ask analyst-style questions about flagged transactions, risk patterns, and review priorities.")
-
-    st.markdown("**Example prompts**")
-    p1, p2, p3, p4, p5 = st.columns(5)
-    btn1 = p1.button("Why was TXN-10012 flagged?")
-    btn2 = p2.button("Show high-risk ACH transactions")
-    btn3 = p3.button("Which payment type has highest fraud rate?")
-    btn4 = p4.button("Show transactions needing manual review")
-    btn5 = p5.button("Summarize suspicious patterns")
-
-    default_prompt = ""
-    if btn1:
-        default_prompt = "Why was transaction TXN-10012 flagged?"
-    elif btn2:
-        default_prompt = "Show high-risk ACH transactions"
-    elif btn3:
-        default_prompt = "Which payment type has highest fraud rate?"
-    elif btn4:
-        default_prompt = "Show transactions needing manual review"
-    elif btn5:
-        default_prompt = "Summarize suspicious patterns in this dataset"
-
-    question = st.text_input("Ask a question", value=default_prompt, placeholder="Type your investigation question here")
-
-    result_df = pd.DataFrame()
-
-    if st.button("Run Investigation", type="primary") or question:
-        summary, result_df = derive_investigation_results(question, filtered_df)
-
-        st.markdown("#### Findings")
-        st.info(summary)
-
-        try:
-            kb_response = query_engine.answer(question)
-            if kb_response:
-                st.markdown("#### Knowledge Context")
-                st.write(kb_response)
-        except Exception:
-            pass
-
-        if len(result_df) > 0:
-            st.markdown("#### Matching Records")
-            st.dataframe(result_df, use_container_width=True, height=320)
-
-            if "transaction_id" in result_df.columns and "risk_score" in result_df.columns:
-                top_row = result_df.reset_index(drop=True).iloc[0]
-                st.markdown("#### Recommended Action")
-                st.success(get_recommended_action(top_row))
-
-                st.markdown("#### Signals Triggered")
-                for signal in get_risk_signals(top_row):
-                    st.write(f"- {signal}")
-
-            st.markdown("#### Generate Case Notes")
-            if st.button("Generate Case Summary"):
-                case_notes = generate_case_notes(result_df)
-                st.text_area("Case Notes", case_notes, height=220)
-
-            csv = result_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "Download Investigation Report",
-                data=csv,
-                file_name="investigation_report.csv",
-                mime="text/csv",
-            )
+        st.markdown("#### Transaction Detail")
+        current = st.session_state.get("investigation_result")
+        if isinstance(current, pd.DataFrame) and not current.empty:
+            render_transaction_detail(current.reset_index(drop=True).iloc[0])
         else:
-            st.warning("No matching records found for that question.")
+            st.markdown("<div class='rl-card'>Run an investigation to inspect a selected transaction.</div>", unsafe_allow_html=True)
 
-with tab4:
-    st.markdown("### Manual Review Queue")
 
-    review_df = filtered_df.copy()
-    if "status" in review_df.columns:
-        flagged_mask = review_df["status"].astype(str).str.lower() == "flagged"
-    else:
-        flagged_mask = pd.Series([False] * len(review_df), index=review_df.index)
+def render_payment_intelligence(df: pd.DataFrame) -> None:
+    st.markdown("<div class='rl-section'>Payment Intelligence</div>", unsafe_allow_html=True)
 
-    review_df = review_df[(review_df["risk_score"] >= HIGH_RISK_THRESHOLD) | flagged_mask].copy()
+    rail_cards = df.groupby("payment_rail").agg(
+        txns=("transaction_id", "count"),
+        avg_risk=("risk_score", "mean"),
+        fail_rate=("status", lambda x: (x.str.lower().isin(["failed", "flagged"])).mean() * 100),
+    ).reset_index()
 
-    if len(review_df) > 0:
-        review_df["priority"] = review_df["risk_score"].fillna(0).apply(get_priority)
-        review_df["recommended_action"] = review_df.apply(get_recommended_action, axis=1)
-        review_df["signals"] = review_df.apply(lambda r: ", ".join(get_risk_signals(r)), axis=1)
+    cols = st.columns(min(4, len(rail_cards)))
+    for col, (_, row) in zip(cols, rail_cards.iterrows()):
+        with col:
+            st.markdown(
+                f"""
+                <div class="rl-card">
+                    <div class="rl-section" style="font-size:1.0rem;margin-bottom:0.2rem;">{row['payment_rail']}</div>
+                    <div class="rl-small">{int(row['txns'])} transactions</div>
+                    <div class="rl-small">Avg risk: {row['avg_risk']:.1f}</div>
+                    <div class="rl-small">Fail / review rate: {row['fail_rate']:.1f}%</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-        display_cols = [
-            c for c in [
+    c1, c2 = st.columns(2)
+    with c1:
+        channel_risk = (
+            df.groupby(["channel", "payment_rail"], dropna=False)["risk_score"]
+            .mean()
+            .reset_index()
+        )
+        fig = px.bar(
+            channel_risk,
+            x="channel",
+            y="risk_score",
+            color="payment_rail",
+            barmode="group",
+            title="Risk by Channel and Rail",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with c2:
+        customer_risk = (
+            df.groupby("customer_id", dropna=False)
+            .agg(txns=("transaction_id", "count"), avg_risk=("risk_score", "mean"), amount=("amount", "sum"))
+            .reset_index()
+            .sort_values(["avg_risk", "amount"], ascending=False)
+            .head(10)
+        )
+        fig2 = px.bar(
+            customer_risk,
+            x="customer_id",
+            y="avg_risk",
+            hover_data=["txns", "amount"],
+            title="Top Customer Risk Profiles",
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+    if "timestamp" in df.columns and df["timestamp"].notna().any():
+        trend = (
+            df.assign(hour=df["timestamp"].dt.hour)
+            .groupby("hour", dropna=False)
+            .agg(txns=("transaction_id", "count"), avg_risk=("risk_score", "mean"))
+            .reset_index()
+        )
+        fig3 = px.line(trend, x="hour", y="avg_risk", markers=True, title="Hourly Risk Trend")
+        st.plotly_chart(fig3, use_container_width=True)
+
+
+def render_alerts_and_cases(df: pd.DataFrame) -> None:
+    st.markdown("<div class='rl-section'>Alerts & Cases</div>", unsafe_allow_html=True)
+
+    queue = df[(df["risk_score"] >= HIGH_RISK_THRESHOLD) | (df["status"].str.lower() == "flagged")].copy()
+    if queue.empty:
+        st.info("No alerts currently meet the review threshold.")
+        return
+
+    queue["priority"] = queue["risk_score"].apply(get_priority)
+    queue["recommended_action"] = queue.apply(get_recommended_action, axis=1)
+    queue["signals"] = queue.apply(lambda r: ", ".join(get_risk_signals(r)), axis=1)
+    queue["case_status"] = "Open"
+    queue["assigned_to"] = queue["priority"].map(
+        {"Critical": "Tier 2 Analyst", "High": "Fraud Analyst", "Medium": "Payments Ops", "Low": "Monitor"}
+    )
+
+    st.dataframe(
+        queue[
+            [
                 "transaction_id",
-                "payment_type",
+                "customer_id",
+                "payment_rail",
                 "amount",
                 "risk_score",
-                "status",
                 "priority",
+                "assigned_to",
+                "case_status",
                 "recommended_action",
                 "signals",
             ]
-            if c in review_df.columns
-        ]
-        st.dataframe(
-            review_df[display_cols].sort_values(["risk_score"], ascending=False),
-            use_container_width=True,
-            height=420,
-        )
-    else:
-        st.info("No transactions currently meet the manual review threshold.")
+        ].sort_values(["risk_score", "amount"], ascending=False),
+        use_container_width=True,
+        height=420,
+    )
+
+
+def render_rules_explainability(df: pd.DataFrame) -> None:
+    st.markdown("<div class='rl-section'>Rules & Explainability</div>", unsafe_allow_html=True)
+
+    sample_row = df.sort_values("risk_score", ascending=False).iloc[0]
+    st.markdown("#### Risk Breakdown Example")
+    parts = []
+    if sample_row["amount"] >= 10000:
+        parts.append(("Large amount", 25))
+    if sample_row["geo_mismatch_flag"] == 1:
+        parts.append(("Geo mismatch", 20))
+    if sample_row["velocity_flag"] == 1:
+        parts.append(("Velocity", 18))
+    if sample_row["beneficiary_change_flag"] == 1:
+        parts.append(("Beneficiary change", 17))
+    if str(sample_row["payment_rail"]).lower() == "wire":
+        parts.append(("Wire sensitivity", 12))
+
+    breakdown = pd.DataFrame(parts, columns=["signal", "points"])
+    if breakdown.empty:
+        breakdown = pd.DataFrame([("Base monitoring", int(sample_row["risk_score"]))], columns=["signal", "points"])
+
+    fig = px.bar(
+        breakdown,
+        x="signal",
+        y="points",
+        title=f"Explainability for {sample_row['transaction_id']}",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("#### Rule Triggers")
+        for sig in get_risk_signals(sample_row):
+            st.write(f"- {sig}")
+
+    with c2:
+        st.markdown("#### Recommendation")
+        st.success(get_recommended_action(sample_row))
+
+
+def render_admin_data(df: pd.DataFrame) -> None:
+    st.markdown("<div class='rl-section'>Admin / Data</div>", unsafe_allow_html=True)
+    st.markdown("#### Loaded Schema")
+    st.dataframe(pd.DataFrame({"column_name": df.columns}), use_container_width=True, height=280)
+
+    with st.expander("Sample schema expectations"):
+        for c in REQUIRED_COLUMNS:
+            st.write(f"- {c}")
+
+
+def main() -> None:
+    apply_custom_css()
+
+    if "prompt" not in st.session_state:
+        st.session_state["prompt"] = ""
+
+    with st.sidebar:
+        st.markdown("## RiskLens AI")
+        role = st.selectbox("Role View", ROLE_OPTIONS, index=0)
+        page = st.radio("Navigate", PAGE_OPTIONS)
+        st.markdown("---")
+        uploaded_file = st.file_uploader("Upload transaction CSV", type=["csv"])
+        use_sample = st.checkbox("Use built-in sample dataset", value=True)
+
+    try:
+        if uploaded_file is not None:
+            df = load_transactions(uploaded_file=uploaded_file)
+            dataset_label = f"Uploaded file: {uploaded_file.name}"
+        elif use_sample:
+            df = load_transactions(DEFAULT_DATA_PATH)
+            dataset_label = "Built-in sample dataset"
+        else:
+            st.warning("Upload a CSV or enable the sample dataset.")
+            return
+
+        df = coerce_types(df)
+        missing = validate_dataframe(df)
+        if missing:
+            st.error(f"Unable to load dataset: Dataset is missing required columns: {missing}")
+            return
+
+    except Exception as exc:
+        st.error(f"Unable to load dataset: {exc}")
+        return
+
+    filtered_df = add_filter_sidebar(df)
+    query_engine = build_query_engine()
+
+    render_header(role)
+    st.write(f"**Loaded dataset:** {dataset_label}")
+
+    if page == "Command Center":
+        render_command_center(filtered_df, role)
+    elif page == "Investigations":
+        render_investigations(filtered_df, query_engine)
+    elif page == "Payment Intelligence":
+        render_payment_intelligence(filtered_df)
+    elif page == "Alerts & Cases":
+        render_alerts_and_cases(filtered_df)
+    elif page == "Rules & Explainability":
+        render_rules_explainability(filtered_df)
+    elif page == "Admin / Data":
+        render_admin_data(filtered_df)
+
+
+if __name__ == "__main__":
+    main()
