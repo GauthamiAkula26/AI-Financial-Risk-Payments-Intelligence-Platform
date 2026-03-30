@@ -18,13 +18,6 @@ class QueryEngine:
             return ""
 
         if isinstance(results, list):
-            cleaned = []
-            for item in results[:3]:
-                if isinstance(item, dict):
-                    text = item.get("text") or item.get("content") or str(item)
-                else:
-                    text = str(item)
-                cleaned.append(text)
-            return "\n\n".join(cleaned)
+            return "\n\n".join(str(x) for x in results[:3])
 
         return str(results)
