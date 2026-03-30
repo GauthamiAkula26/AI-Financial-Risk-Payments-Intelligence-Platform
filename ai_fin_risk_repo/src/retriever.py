@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
-
 
 class LocalRetriever:
-    def __init__(self, documents: list[Any]):
+    def __init__(self, documents):
         self.documents = documents or []
 
-    def retrieve(self, query: str, top_k: int = 3) -> list[str]:
+    def retrieve(self, query: str, top_k: int = 3):
         if not query:
             return []
 
@@ -15,13 +13,9 @@ class LocalRetriever:
         scored = []
 
         for doc in self.documents:
-            if isinstance(doc, dict):
-                text = str(doc.get("text") or doc.get("content") or "")
-            else:
-                text = str(doc)
-
-            text_lower = text.lower()
-            score = sum(1 for term in q_terms if term in text_lower)
+            text = str(doc)
+            lowered = text.lower()
+            score = sum(1 for t in q_terms if t in lowered)
             if score > 0:
                 scored.append((score, text))
 
