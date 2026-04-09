@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 
-class QueryEngine:
-    def __init__(self, retriever=None):
-        self.retriever = retriever
+class LocalRetriever:
+    def __init__(self, documents):
+        self.documents = documents or []
 
-    def answer(self, question: str) -> str:
-        if not question or self.retriever is None:
-            return ""
+    def retrieve(self, query: str, top_k: int = 3):
+        if not query:
+            return []
 
-        try:
-            results = self.retriever.retrieve(question)
-        except Exception:
-            return ""
+        q_terms = set(query.lower().split())
+        scored = []
 
-        if not results:
-            return ""
+        for doc in self.documents:
+            text = str(doc)
+            lowered = text.lower()
+            score = sum(1 for t in q_terms if t in lowered)
+            if score > 0:
+                scored.append((score, text))
 
-        if isinstance(results, list):
-            return "\n\n".join(str(item) for item in results[:3])
-
-        return str(results)
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [text for _, text in scored[:top_k]]
