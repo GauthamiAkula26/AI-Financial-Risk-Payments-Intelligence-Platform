@@ -18,6 +18,6 @@ class QueryEngine:
             return ""
 
         if isinstance(results, list):
-            return "\n\n".join(str(x) for x in results[:3])
+            return "\n\n".join(str(item) for item in results[:3])
 
         return str(results)
